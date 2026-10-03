@@ -10,12 +10,13 @@ import (
 )
 
 type FSM struct {
-	store *store.Store
-	raft  *raft.Raft
+	store       *store.Store
+	raft        *raft.Raft
+	onApplyHook func()
 }
 
-func NewFSM(s *store.Store, r *raft.Raft) *FSM {
-	return &FSM{store: s, raft: r}
+func NewFSM(s *store.Store, r *raft.Raft, hook func()) *FSM {
+	return &FSM{store: s, raft: r, onApplyHook: hook}
 }
 
 func (f *FSM) Apply(l *raft.Log) interface{} {
@@ -25,16 +26,23 @@ func (f *FSM) Apply(l *raft.Log) interface{} {
 		return nil
 	}
 
+	var result interface{}
 	switch c.Op {
 	case "put":
 		f.store.Apply(l)
-	case "addPeer":
-		f.raft.AddVoter(raft.ServerID(c.PeerID), raft.ServerAddress(c.PeerAddr), 0, 0)
-	case "removePeer":
-		f.raft.RemoveServer(raft.ServerID(c.PeerID), 0, 0)
+		result = nil
+	case "delete":
+		result = f.store.Apply(l)
+	case "batchPut":
+		result = f.store.Apply(l)
 	}
 
-	return nil
+	// Call the hook after successful apply to update metrics
+	if f.onApplyHook != nil {
+		f.onApplyHook()
+	}
+
+	return result
 }
 
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
